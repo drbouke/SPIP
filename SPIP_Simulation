@@ -1,0 +1,153 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from collections import Counter
+from scipy.spatial.distance import pdist
+from scipy.interpolate import make_interp_spline
+import warnings
+
+warnings.filterwarnings("ignore")
+
+
+FIG_DIR = "figures"
+RESULTS_DIR = "results"
+os.makedirs(FIG_DIR, exist_ok=True)
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+
+def get_transform(j, m):
+    angles = np.linspace(0, np.pi / 2, m)
+    scales = np.linspace(0.4, 0.6, m)
+    translations = [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (-1.0, 1.0)]
+    theta = angles[(j - 1) % len(angles)]
+    s = scales[(j - 1) % len(scales)]
+    tx, ty = translations[(j - 1) % len(translations)]
+    R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+    A = s * R
+    b = np.array([tx, ty])
+    return A, b
+
+
+def run_spip_experiment(num_steps=25, num_paths=1000, m=3, epsilon=0.5, x0=(5, 5), seed=None):
+    if seed is not None:
+        np.random.seed(seed)
+    x0 = np.array(x0)
+    endpoints = []
+
+    for _ in range(num_paths):
+        x = x0.copy()
+        for _ in range(num_steps):
+            sigma_i = np.random.randint(1, m + 1)
+            delta = np.random.uniform(-epsilon, epsilon, size=2)
+            A, b = get_transform(sigma_i, m)
+            x = np.floor(A @ x + b + delta)
+        endpoints.append(tuple(x))
+
+    endpoint_counts = Counter(endpoints)
+    unique_endpoints = np.array(list(endpoint_counts.keys()))
+    counts = np.array(list(endpoint_counts.values()))
+
+    symbolic_entropy = -np.sum((counts / num_paths) * np.log2(counts / num_paths + 1e-10))
+    spread = len(unique_endpoints)
+    most_common_count = counts.max()
+    collisions = np.sum(counts > 1)
+    distances = pdist(unique_endpoints)
+    avg_distance = distances.mean() if len(distances) > 0 else 0.0
+    max_distance = distances.max() if len(distances) > 0 else 0.0
+    freedom = symbolic_entropy / np.log2(m + 1e-10)
+
+    return {
+        'Unique Endpoints': spread,
+        'Most Frequent Count': most_common_count,
+        'Entropy (bits)': symbolic_entropy,
+        'Avg Distance': avg_distance,
+        'Max Distance': max_distance,
+        'Collisions': collisions,
+        'Symbolic Freedom': freedom
+    }
+
+
+def run_multiple_experiments(configs, seed=42):
+    all_stats = []
+    for i, cfg in enumerate(configs):
+        stats = run_spip_experiment(**cfg, seed=seed + i)
+        stats.update({
+            'Experiment': f"Run {i + 1}",
+            'Steps': cfg['num_steps'],
+            'Paths': cfg['num_paths'],
+            'Transforms': cfg['m'],
+            'Epsilon': cfg['epsilon']
+        })
+        all_stats.append(stats)
+    df = pd.DataFrame(all_stats)
+    df.to_csv(os.path.join(RESULTS_DIR, "all_experiments.csv"), index=False)
+    return df
+
+
+def smooth_line(ax, x, y, label=None, color=None, marker='o'):
+    if len(x) < 4:
+        ax.plot(x, y, marker=marker, label=label, color=color)
+    else:
+        xnew = np.linspace(min(x), max(x), 200)
+        spl = make_interp_spline(x, y, k=3)
+        y_smooth = spl(xnew)
+        ax.plot(xnew, y_smooth, label=label, color=color)
+        ax.scatter(x, y, color=color, s=30)
+
+def plot_extended_analysis(df):
+    sns.set(style="whitegrid")
+    fig, axs = plt.subplots(2, 3, figsize=(16, 10))
+    fig.suptitle("SPIP Statistical Analysis", fontsize=16)
+
+    axs[0, 0].set_title("Entropy vs Steps")
+    smooth_line(axs[0, 0], df['Steps'], df['Entropy (bits)'])
+
+    axs[0, 1].set_title("Symbolic Freedom vs Transforms")
+    smooth_line(axs[0, 1], df['Transforms'], df['Symbolic Freedom'], color='purple', marker='s')
+
+    axs[0, 2].set_title("Endpoint Collisions per Experiment")
+    axs[0, 2].bar(df['Experiment'], df['Collisions'], color='tomato')
+
+    axs[1, 0].set_title("Entropy vs Avg Distance")
+    sc = axs[1, 0].scatter(df['Entropy (bits)'], df['Avg Distance'], c=df['Steps'], cmap='viridis', s=80)
+    plt.colorbar(sc, ax=axs[1, 0], label='Steps')
+
+    axs[1, 1].set_title("Unique Endpoints vs Steps")
+    smooth_line(axs[1, 1], df['Steps'], df['Unique Endpoints'], color='teal', marker='x')
+
+    axs[1, 2].set_title("Most Frequent Count vs Steps")
+    smooth_line(axs[1, 2], df['Steps'], df['Most Frequent Count'], color='orange', marker='^')
+
+    for ax in axs.flat:
+        ax.grid(True)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.savefig(os.path.join(FIG_DIR, "statistical_analysis.png"))
+    plt.show()
+
+
+def highlight_best_experiment(df):
+    criteria = df.sort_values(by=['Entropy (bits)', 'Unique Endpoints', 'Collisions'], ascending=[False, False, False])
+    top3 = criteria.head(3)
+    print("🔍 Best Experiment Based on Entropy, Diversity, and Collisions:")
+    print(top3[['Experiment', 'Entropy (bits)', 'Unique Endpoints', 'Collisions']])
+    top3.to_csv(os.path.join(RESULTS_DIR, "top_experiments.csv"), index=False)
+    return top3
+
+experiment_configs = [
+    {'num_steps': 30, 'num_paths': 1000, 'm': 2,  'epsilon': 0.05, 'x0': (5, 5)},
+    {'num_steps': 60, 'num_paths': 1000, 'm': 4,  'epsilon': 0.1,  'x0': (5, 5)},
+    {'num_steps': 120, 'num_paths': 1000, 'm': 6, 'epsilon': 0.25, 'x0': (5, 5)},
+    {'num_steps': 200, 'num_paths': 1000, 'm': 8, 'epsilon': 0.4,  'x0': (5, 5)},
+    {'num_steps': 300, 'num_paths': 1000, 'm': 12, 'epsilon': 0.5, 'x0': (5, 5)},
+    {'num_steps': 500, 'num_paths': 1000, 'm': 20, 'epsilon': 0.6, 'x0': (5, 5)},
+    {'num_steps': 800, 'num_paths': 1000, 'm': 30, 'epsilon': 0.7, 'x0': (5, 5)},
+    {'num_steps': 1200, 'num_paths': 1000, 'm': 40, 'epsilon': 0.8, 'x0': (5, 5)}
+]
+
+
+df_results = run_multiple_experiments(experiment_configs)
+plot_extended_analysis(df_results)
+top_experiments = highlight_best_experiment(df_results)
