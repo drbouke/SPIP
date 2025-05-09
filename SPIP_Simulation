@@ -1,3 +1,5 @@
+# === Imports and Setup ===
+
 import os
 import numpy as np
 import pandas as pd
@@ -8,47 +10,82 @@ from scipy.spatial.distance import pdist
 from scipy.interpolate import make_interp_spline
 import warnings
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore")  # Suppress warnings for cleaner output
 
-
+# Create output directories for figures and results
 FIG_DIR = "figures"
 RESULTS_DIR = "results"
 os.makedirs(FIG_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
+# === Transformation Generator ===
 
 def get_transform(j, m):
-    angles = np.linspace(0, np.pi / 2, m)
-    scales = np.linspace(0.4, 0.6, m)
-    translations = [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (-1.0, 1.0)]
+    """
+    Generate a contractive affine transformation indexed by j.
+    
+    Parameters:
+        j (int): Index of the transformation.
+        m (int): Total number of distinct symbolic transformations.
+        
+    Returns:
+        A (2x2 ndarray): Contractive rotation matrix.
+        b (1x2 ndarray): Translation vector.
+    """
+    angles = np.linspace(0, np.pi / 2, m)          # Generate m rotation angles
+    scales = np.linspace(0.4, 0.6, m)              # Generate m scaling factors
+    translations = [(1.0, 0.0), (0.0, 1.0), 
+                    (1.0, 1.0), (-1.0, 1.0)]        # Fixed translation choices
+    
     theta = angles[(j - 1) % len(angles)]
     s = scales[(j - 1) % len(scales)]
     tx, ty = translations[(j - 1) % len(translations)]
-    R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+    
+    R = np.array([[np.cos(theta), -np.sin(theta)],
+                  [np.sin(theta),  np.cos(theta)]])  # 2D rotation
     A = s * R
     b = np.array([tx, ty])
     return A, b
 
+# === SPIP Trajectory Simulation ===
 
 def run_spip_experiment(num_steps=25, num_paths=1000, m=3, epsilon=0.5, x0=(5, 5), seed=None):
+    """
+    Run a single SPIP simulation with specified parameters.
+    
+    Parameters:
+        num_steps (int): Number of symbolic steps per path.
+        num_paths (int): Number of paths to simulate.
+        m (int): Number of symbolic transformations.
+        epsilon (float): Noise bound for perturbations.
+        x0 (tuple): Initial lattice point.
+        seed (int): Random seed (optional).
+        
+    Returns:
+        dict: Summary statistics for endpoint distribution.
+    """
     if seed is not None:
         np.random.seed(seed)
+
     x0 = np.array(x0)
     endpoints = []
 
+    # Simulate multiple symbolic paths
     for _ in range(num_paths):
         x = x0.copy()
         for _ in range(num_steps):
             sigma_i = np.random.randint(1, m + 1)
             delta = np.random.uniform(-epsilon, epsilon, size=2)
             A, b = get_transform(sigma_i, m)
-            x = np.floor(A @ x + b + delta)
-        endpoints.append(tuple(x))
+            x = np.floor(A @ x + b + delta)  # Apply transformation and quantize
+        endpoints.append(tuple(x))  # Store endpoint as discrete symbol
 
+    # Analyze endpoint distribution
     endpoint_counts = Counter(endpoints)
     unique_endpoints = np.array(list(endpoint_counts.keys()))
     counts = np.array(list(endpoint_counts.values()))
 
+    # Compute statistics
     symbolic_entropy = -np.sum((counts / num_paths) * np.log2(counts / num_paths + 1e-10))
     spread = len(unique_endpoints)
     most_common_count = counts.max()
@@ -56,7 +93,7 @@ def run_spip_experiment(num_steps=25, num_paths=1000, m=3, epsilon=0.5, x0=(5, 5
     distances = pdist(unique_endpoints)
     avg_distance = distances.mean() if len(distances) > 0 else 0.0
     max_distance = distances.max() if len(distances) > 0 else 0.0
-    freedom = symbolic_entropy / np.log2(m + 1e-10)
+    freedom = symbolic_entropy / np.log2(m + 1e-10)  # Normalized entropy
 
     return {
         'Unique Endpoints': spread,
@@ -68,8 +105,19 @@ def run_spip_experiment(num_steps=25, num_paths=1000, m=3, epsilon=0.5, x0=(5, 5
         'Symbolic Freedom': freedom
     }
 
+# === Batch Experiment Runner ===
 
 def run_multiple_experiments(configs, seed=42):
+    """
+    Run multiple SPIP experiments from a list of configurations.
+    
+    Parameters:
+        configs (list): Each element is a dict of parameters for one run.
+        seed (int): Base random seed.
+        
+    Returns:
+        DataFrame: Combined results for all experiments.
+    """
     all_stats = []
     for i, cfg in enumerate(configs):
         stats = run_spip_experiment(**cfg, seed=seed + i)
@@ -81,12 +129,17 @@ def run_multiple_experiments(configs, seed=42):
             'Epsilon': cfg['epsilon']
         })
         all_stats.append(stats)
+    
     df = pd.DataFrame(all_stats)
     df.to_csv(os.path.join(RESULTS_DIR, "all_experiments.csv"), index=False)
     return df
 
+# === Plotting Helpers ===
 
 def smooth_line(ax, x, y, label=None, color=None, marker='o'):
+    """
+    Plot a smoothed line using spline interpolation.
+    """
     if len(x) < 4:
         ax.plot(x, y, marker=marker, label=label, color=color)
     else:
@@ -96,27 +149,40 @@ def smooth_line(ax, x, y, label=None, color=None, marker='o'):
         ax.plot(xnew, y_smooth, label=label, color=color)
         ax.scatter(x, y, color=color, s=30)
 
+# === Visualization ===
+
 def plot_extended_analysis(df):
+    """
+    Generate a multi-panel plot to visualize SPIP simulation statistics.
+    
+    Saves output to: figures/statistical_analysis.png
+    """
     sns.set(style="whitegrid")
     fig, axs = plt.subplots(2, 3, figsize=(16, 10))
     fig.suptitle("SPIP Statistical Analysis", fontsize=16)
 
+    # Panel 1: Entropy vs Steps
     axs[0, 0].set_title("Entropy vs Steps")
     smooth_line(axs[0, 0], df['Steps'], df['Entropy (bits)'])
 
+    # Panel 2: Symbolic Freedom vs m
     axs[0, 1].set_title("Symbolic Freedom vs Transforms")
     smooth_line(axs[0, 1], df['Transforms'], df['Symbolic Freedom'], color='purple', marker='s')
 
+    # Panel 3: Collision count
     axs[0, 2].set_title("Endpoint Collisions per Experiment")
     axs[0, 2].bar(df['Experiment'], df['Collisions'], color='tomato')
 
+    # Panel 4: Entropy vs Distance
     axs[1, 0].set_title("Entropy vs Avg Distance")
     sc = axs[1, 0].scatter(df['Entropy (bits)'], df['Avg Distance'], c=df['Steps'], cmap='viridis', s=80)
     plt.colorbar(sc, ax=axs[1, 0], label='Steps')
 
+    # Panel 5: Unique Endpoints vs Steps
     axs[1, 1].set_title("Unique Endpoints vs Steps")
     smooth_line(axs[1, 1], df['Steps'], df['Unique Endpoints'], color='teal', marker='x')
 
+    # Panel 6: Most frequent endpoint count vs Steps
     axs[1, 2].set_title("Most Frequent Count vs Steps")
     smooth_line(axs[1, 2], df['Steps'], df['Most Frequent Count'], color='orange', marker='^')
 
@@ -127,14 +193,24 @@ def plot_extended_analysis(df):
     plt.savefig(os.path.join(FIG_DIR, "statistical_analysis.png"))
     plt.show()
 
+# === Reporting ===
 
 def highlight_best_experiment(df):
-    criteria = df.sort_values(by=['Entropy (bits)', 'Unique Endpoints', 'Collisions'], ascending=[False, False, False])
+    """
+    Identify the top 3 experiments by entropy, diversity, and low collisions.
+    
+    Returns:
+        DataFrame: Top 3 ranked experiments.
+    """
+    criteria = df.sort_values(by=['Entropy (bits)', 'Unique Endpoints', 'Collisions'],
+                              ascending=[False, False, False])
     top3 = criteria.head(3)
-    print("🔍 Best Experiment Based on Entropy, Diversity, and Collisions:")
+    print("Best Experiment Based on Entropy, Diversity, and Collisions:")
     print(top3[['Experiment', 'Entropy (bits)', 'Unique Endpoints', 'Collisions']])
     top3.to_csv(os.path.join(RESULTS_DIR, "top_experiments.csv"), index=False)
     return top3
+
+# === Experiment Configurations and Execution ===
 
 experiment_configs = [
     {'num_steps': 30, 'num_paths': 1000, 'm': 2,  'epsilon': 0.05, 'x0': (5, 5)},
@@ -147,7 +223,7 @@ experiment_configs = [
     {'num_steps': 1200, 'num_paths': 1000, 'm': 40, 'epsilon': 0.8, 'x0': (5, 5)}
 ]
 
-
+# Run the experiment pipeline
 df_results = run_multiple_experiments(experiment_configs)
 plot_extended_analysis(df_results)
 top_experiments = highlight_best_experiment(df_results)
