@@ -69,22 +69,162 @@ def compute_chi_square(bit_matrix):
 
 # ---------- Visualization ----------
 
-def smooth_plot_path(path, title="Chaotic Walk Trajectory"):
+def smooth_plot_path(path, title="Chaotic Walk Trajectory", grid_size=1024):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy.interpolate import splprep, splev
+
     coords = np.array(path)
-    x, y = coords[:,0], coords[:,1]
-    plt.figure(figsize=(7,5))
+    x, y = coords[:, 0], coords[:, 1]
+    n_points = len(coords)
+    steps = np.diff(coords, axis=0)
+
+    unique_positions = len(np.unique(coords, axis=0))
+    total_length = np.sum(np.linalg.norm(steps, axis=1))
+    mean_step_length = np.mean(np.linalg.norm(steps, axis=1))
+    std_step_length = np.std(np.linalg.norm(steps, axis=1))
+
+    x_min, y_min = coords.min(axis=0)
+    x_max, y_max = coords.max(axis=0)
+    width = x_max - x_min
+    height = y_max - y_min
+
+    grid = np.zeros((grid_size, grid_size), dtype=bool)
+    if width == 0 or height == 0:
+        fd = float('nan')
+    else:
+        scaled_coords = ((coords - [x_min, y_min]) / [width, height] * (grid_size - 1)).astype(int)
+        for xg, yg in scaled_coords:
+            if 0 <= xg < grid_size and 0 <= yg < grid_size:
+                grid[yg, xg] = True
+
+        def box_count(Z, k):
+            S = np.add.reduceat(
+                np.add.reduceat(Z, np.arange(0, Z.shape[0], k), axis=0),
+                np.arange(0, Z.shape[1], k), axis=1)
+            return np.count_nonzero(S)
+
+        def fractal_dimension(Z):
+            p = min(Z.shape)
+            n = 2 ** np.floor(np.log2(p)).astype(int)
+            sizes = 2 ** np.arange(int(np.log2(n)), 1, -1)
+
+            counts = []
+            valid_sizes = []
+            for size in sizes:
+                c = box_count(Z, size)
+                if c > 0:
+                    counts.append(c)
+                    valid_sizes.append(size)
+
+            if len(valid_sizes) < 2:
+                return float('nan')
+
+            coeffs = np.polyfit(np.log(valid_sizes), np.log(counts), 1)
+            return -coeffs[0]
+
+        fd = fractal_dimension(grid)
+
+    # Prepare the figure
+    plt.figure(figsize=(8, 6))
     try:
-        tck, u = splprep([x,y], s=0)
-        xs, ys = splev(np.linspace(0,1,300), tck)
+        tck, u = splprep([x, y], s=0)
+        xs, ys = splev(np.linspace(0, 1, 300), tck)
         plt.plot(xs, ys, label="Path", color="darkblue")
     except Exception:
         plt.plot(x, y, marker='o', linestyle='-', label="Raw Path", color="darkblue")
+
     plt.scatter(x[0], y[0], color="green", label="Start", zorder=3)
     plt.scatter(x[-1], y[-1], color="red", label="End", zorder=3)
-    plt.title(title)
-    plt.xlabel("X"); plt.ylabel("Y")
-    plt.grid(True); plt.legend(); plt.axis('equal')
+
+    plt.title(f"{title} (n = {n_points})")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.grid(True)
+    plt.axis('equal')
+    plt.legend()
+
+    # Prepare metrics string
+    metrics_text = (
+        f"Unique positions: {unique_positions}\n"
+        f"Total length: {total_length:.1f}\n"
+        f"Mean step: {mean_step_length:.2f}\n"
+        f"Std step: {std_step_length:.2f}\n"
+        f"Bounding box: {width:.0f} × {height:.0f}\n"
+        f"Fractal dimension: {fd:.3f}" if not np.isnan(fd) else "Fractal dimension: undefined"
+    )
+
+    plt.gcf().text(0.1, 0.92, metrics_text, fontsize=9,
+                   verticalalignment='top', horizontalalignment='left',
+                   bbox=dict(facecolor='white', alpha=0.85, edgecolor='gray'))
+
+    plt.tight_layout()
     plt.show()
+
+
+
+def analyze_path_geometry(path, grid_size=1024):
+    coords = np.array(path)
+    steps = np.diff(coords, axis=0)
+
+    unique_positions = len(np.unique(coords, axis=0))
+    total_length = np.sum(np.linalg.norm(steps, axis=1))
+    mean_step_length = np.mean(np.linalg.norm(steps, axis=1))
+    std_step_length = np.std(np.linalg.norm(steps, axis=1))
+
+    x_min, y_min = coords.min(axis=0)
+    x_max, y_max = coords.max(axis=0)
+    width = x_max - x_min
+    height = y_max - y_min
+
+    print("\n--- Geometric Analysis of Chaotic Walk ---")
+    print(f"Unique positions: {unique_positions}")
+    print(f"Total path length: {total_length:.4f}")
+    print(f"Mean step length: {mean_step_length:.4f}")
+    print(f"Std of step length: {std_step_length:.4f}")
+    print(f"Bounding box: width={width:.4f}, height={height:.4f}")
+
+    grid = np.zeros((grid_size, grid_size), dtype=bool)
+    if width == 0 or height == 0:
+        print("Fractal dimension: undefined (flat path)")
+        return
+
+    scaled_coords = ((coords - [x_min, y_min]) / [width, height] * (grid_size - 1)).astype(int)
+    for x, y in scaled_coords:
+        if 0 <= x < grid_size and 0 <= y < grid_size:
+            grid[y, x] = True 
+
+    def box_count(Z, k):
+        S = np.add.reduceat(
+            np.add.reduceat(Z, np.arange(0, Z.shape[0], k), axis=0),
+                               np.arange(0, Z.shape[1], k), axis=1)
+        return np.count_nonzero(S)
+
+    def fractal_dimension(Z):
+        p = min(Z.shape)
+        n = 2 ** np.floor(np.log2(p)).astype(int)
+        sizes = 2 ** np.arange(int(np.log2(n)), 1, -1)
+
+        counts = []
+        valid_sizes = []
+        for size in sizes:
+            c = box_count(Z, size)
+            if c > 0:
+                counts.append(c)
+                valid_sizes.append(size)
+
+        if len(valid_sizes) < 2:
+            return float('nan')
+
+        coeffs = np.polyfit(np.log(valid_sizes), np.log(counts), 1)
+        return -coeffs[0]
+
+    fd = fractal_dimension(grid)
+    if np.isnan(fd):
+        print("Estimated fractal dimension (box-counting): undefined (insufficient variation)")
+    else:
+        print(f"Estimated fractal dimension (box-counting): {fd:.4f}")
+
 
 # ---------- Avalanche Experiment ----------
 
@@ -107,6 +247,7 @@ def run_avalanche_experiment(
         path1 = chaotic_walk(x0, n, epsilon, a_params, b_range)
         if trial == 0 and plot_path:
             smooth_plot_path(path1)
+            analyze_path_geometry(path1)
 
         mid = n // 2
         for offset in perturb_offsets:
@@ -176,7 +317,7 @@ if __name__ == "__main__":
     random.seed(42)
 
     df, chi2_stats = run_avalanche_experiment(
-        x0=np.array([0,0]), n=128, epsilon=0.25,
+        x0=np.array([0,0]), n=127, epsilon=0.25,
         trials=50, a_params=(0.6, -0.2, 0.3, 0.5), b_range=(-5,5),
         perturb_offsets=(-5,-1,0,1,5), show_plots=True, plot_path=True,
         hash_algos=("SHA3", "SHAKE256", "BLAKE3")
@@ -184,7 +325,7 @@ if __name__ == "__main__":
 
     print("\n--- Chi-square Results by Algorithm ---")
     for algo, (chi2, p_val) in chi2_stats.items():
-        print(f"[{algo}] Chi-square: {chi2:.2f}, p-value: {p_val:.4f}")
+        print(f"[{algo}] Chi-square: {chi2:.4f}, p-value: {p_val:.4f}")
 
     print("\n--- Summary Statistics ---")
     print(df.groupby('algorithm')[['hamming','bit_flip_rate','entropy_diff']].describe())
